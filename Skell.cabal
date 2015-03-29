@@ -1,0 +1,64 @@
+name: Skell
+version: 0.1.0.0
+cabal-version: >=1.10
+build-type: Simple
+license: BSD3
+license-file: LICENSE
+maintainer: eletodoguaysinc@gmail.com
+description:
+category: Development
+author: Eleazar Díaz Delgado
+data-dir: ""
+
+library
+    build-depends: base ==4.7.*,
+                   cairo ==0.13.*,
+                   gtk3 ==0.13.*,
+                   process ==1.2.0.*,
+                   mtl -any,
+                   containers == 0.5.5.*,
+                   data-default == 0.5.*,
+                   pipes-concurrency == 2.0.*,
+                   pipes == 4.1.*,
+                   async == 2.0.*,
+                   lens -any,
+                   parsec -any,
+                   yi-rope == 0.7.0.*,
+                   bytestring -any,
+                   text -any
+    exposed-modules:
+                   Skell.Buffer,
+                   Skell.Core,
+                   Skell.Debug,
+                   Skell.Keymap,
+                   Skell.TextDisplay
+                   Skell.Types,
+                   Skell.UI.Gtk.Keys,
+                   Skell.UI.Gtk
+    exposed: True
+    buildable: True
+    default-language: Haskell2010
+    hs-source-dirs: .
+    ghc-options: -Wall -threaded
+
+executable Skell
+    build-depends: base ==4.7.*,
+                   cairo -any,
+                   gtk3 -any,
+                   process ==1.2.0.*,
+                   mtl -any,
+                   containers == 0.5.5.*,
+                   data-default == 0.5.*,
+                   pipes-concurrency == 2.0.*,
+                   pipes == 4.1.*,
+                   async == 2.0.*,
+                   lens -any,
+                   parsec -any,
+                   bytestring -any,
+                   yi-rope == 0.7.0.*,
+                   text -any
+    main-is: Main.hs
+    buildable: True
+    default-language: Haskell2010
+    hs-source-dirs: .
+    ghc-options: -Wall -threaded
