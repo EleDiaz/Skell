@@ -15,12 +15,10 @@ import           Skell.Types
 --
 coreModel :: Pipe ISkell OSkell IOSkell ()
 coreModel = do
-  -- iSk <- await
-  -- lift $ get >>= flip _keymap iSk
-  -- modify (\st -> st^.keymap iSk) -- Pasamos los eventos de entrada al keymap definido
-
+  iSk <- await
+  lift $ get >>= flip _keymap iSk
   yield $ OSkell "Hola que tal"
-  return ()
+  coreModel
 
 -- coreModelDebug :: Mode -> Pipe ISkell OSkell IOSkell ()
 -- coreModelDebug mode = do

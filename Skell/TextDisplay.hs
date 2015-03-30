@@ -1,1 +1,0 @@
-module Skell.TextDisplay where

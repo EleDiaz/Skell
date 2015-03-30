@@ -1,9 +1,8 @@
-
 {-# LANGUAGE TemplateHaskell #-}
 module Skell.Types where
 
 import           Control.Lens
-import           Control.Monad.State
+import           Control.Monad.State.Strict
 import           Data.Default
 import           Data.Sequence       (Seq)
 import qualified Data.Sequence       as S

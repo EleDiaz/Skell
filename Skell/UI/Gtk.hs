@@ -5,12 +5,13 @@ module Skell.UI.Gtk
 
 import           Control.Concurrent.Async (async, wait)
 import           Control.Lens
-import           Control.Monad.State
+import           Control.Monad.State.Strict
 
 import           Data.Default
 import qualified Data.Text                as T
 
 import           Pipes
+import           Pipes.Lift
 import           Pipes.Concurrent
 
 import           Graphics.Rendering.Cairo hiding (x, y)
@@ -29,8 +30,7 @@ gtkFrontend coreModel = do
 
     (consumer, producer) <- makeLayoutText vBox win
 
-    a <- async $ evalStateT (return def) $
-            runEffect $ producer >-> coreModel >-> consumer
+    a <- async $ runEffect $ producer >-> evalStateP def coreModel >-> consumer
 
     boxPackStart vBox infoBarW PackNatural 0
 
@@ -40,6 +40,13 @@ gtkFrontend coreModel = do
     widgetShowAll win
     mainGUI
     wait a
+    return ()
+
+-- onLines :: (String -> IO a) -> IO b
+-- onLines callback = forever $ do
+--     str <- getLine
+--     callback str
+
 
 makeLayoutText :: MonadIO m
                   => VBox
@@ -64,18 +71,17 @@ makeLayoutText vBox win = do
     im <- imMulticontextNew
 
     (output, input) <- spawn $ newest 1  -- ISkell
-    (output2, input2) <- spawn $ latest def -- OSkell
+    (output2, input2) <- spawn $ newest 1 -- OSkell
 
     -- Añadir el resaltado desde aqui!!! El View (String, [Atrs])
     let relayout = do
           oSk <- await
-          lift $ print "hola"
           lift $ postGUISync $ do
             layoutSetText lay (oSk^.textDisplayO)
             layoutSetAttributes lay []
             widgetQueueDraw area
+          relayout
 
-    async $ runEffect (fromInput input2 >-> relayout) >> performGC
 
     void $ GTK.on im imContextCommit $ \str -> do
         _ <- atomically $ send output $ convertKeys (Nothing, Just str)
@@ -95,6 +101,9 @@ makeLayoutText vBox win = do
                 _ <- liftIO $ atomically $ send output $ convertKeys (Just $ T.unpack kName, fmap (:[]) kChar)
                 return ()
             return True
+
+    void $ forkIO $ runEffect (fromInput input2 >-> relayout) -- binding
+    atomically $ send output def -- first Refresh screen
     return (toOutput output2, fromInput input)
 
 updateLayout' :: PangoLayout -> Render ()
