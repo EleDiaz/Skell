@@ -2,6 +2,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Skell.Keymap (
                      mkKeymap,
+                     parseKeys,
                      -- defaultEmacsKeymap
                     ) where
 
@@ -75,29 +76,19 @@ parseKeys s = let parser = many1 $ do
             return key
 
 
-mkKeymap :: [(String, IOSkell Bool)] -> Seq Keys -> IOSkell Bool
+mkKeymap :: [(String, IOSkell ())] -> Seq Keys -> IOSkell ()
 mkKeymap ls sq = do
   ls' <- convert ls
   -- if ls' isEmpty?
   -- defaultKeymap >> debug "A empty keymap as input, be proceded with an defaultKeymap"
   case find ((==sq) . fst) ls' of
     Just (_,act) -> act
-    Nothing -> return False
+    Nothing -> return ()
 
-convert :: [(String, IOSkell Bool)] -> IOSkell [(Seq Keys, IOSkell Bool)]
+convert :: [(String, IOSkell ())] -> IOSkell [(Seq Keys, IOSkell ())]
 convert [] = return []
 convert ((x,act):xs) = case parseKeys x of
                          Left _ -> convert xs -- debug "No parse key" ++ err
                          Right b -> fmap  ((b,act):) (convert xs)
 
--- defaultEmacsKeymap :: Seq Keys -> IOSkell Bool
--- defaultEmacsKeymap sq
---     | S.drop (S.length sq - 1) sq == ctrlG = return True
---     | otherwise = mkKeymap
---                   [ ("C-x-s", exit .= True >> return True) -- TODO
---                   , ("Left", edit.buffers._1._1 %= moveLeftChar >> return True)
---                   , ("Right", edit.buffers._1._1 %= moveRightChar >> return True)
---                   , ("C-Left", edit.buffers._1._1 %= prevToken >> return True)
---                   , ("C-Right", edit.buffers._1._1 %= nextToken >> return True)] sq
 
---     where Right ctrlG = parseKeys "C-g"

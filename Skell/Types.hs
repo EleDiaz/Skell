@@ -48,9 +48,10 @@ data Skell = Skell
     , _clipboard :: YiString
     , _keymap    :: ISkell -> IOSkell ()
     -- ^ Combinaciones de teclas
+    , _exit      :: Bool
     }
 instance Default Skell where
-    def = Skell S.empty R.empty (const (return ()))
+    def = Skell (S.singleton def) R.empty (const (return ())) False
 
 makeLenses ''ISkell
 makeLenses ''OSkell

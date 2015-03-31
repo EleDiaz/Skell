@@ -103,7 +103,7 @@ makeLayoutText vBox win = do
             return True
 
     void $ forkIO $ runEffect (fromInput input2 >-> relayout) -- binding
-    atomically $ send output def -- first Refresh screen
+    void $ atomically $ send output def -- first Refresh screen
     return (toOutput output2, fromInput input)
 
 updateLayout' :: PangoLayout -> Render ()

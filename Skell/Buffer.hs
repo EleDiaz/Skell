@@ -3,6 +3,7 @@ module Skell.Buffer where
 
 import           Control.Lens
 import           Control.Monad.State
+import           Data.Default
 
 import           Yi.Rope             (YiString)
 import qualified Yi.Rope             as YS
@@ -14,6 +15,8 @@ data Buffer = Buffer
     , _content  :: YiString
     , _cursor   :: Int
     } deriving (Show)
+instance Default Buffer where
+    def = Buffer "**none**" YS.empty 0
 
 makeLenses ''Buffer
 
@@ -32,7 +35,6 @@ moveLeft = modify moveLeft_
 
 moveRight :: BufferM ()
 moveRight = modify moveRight_
-
 
 insertStr_ :: String -> Buffer -> Buffer
 insertStr_ new (Buffer n str pos) = Buffer n (YS.concat [before, YS.fromString new,after]) (pos+length new)
