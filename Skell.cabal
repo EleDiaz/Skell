@@ -11,27 +11,27 @@ author: Eleazar Díaz Delgado
 data-dir: ""
 
 library
-    build-depends: base ==4.7.*,
+    build-depends: base ==4.8.*,
                    cairo ==0.13.*,
                    gtk3 ==0.13.*,
-                   process ==1.2.0.*,
+                   process ==1.2.*,
                    mtl -any,
-                   containers == 0.5.5.*,
-                   data-default == 0.5.*,
-                   pipes-concurrency == 2.0.*,
+                   containers -any,
+                   data-default -any,
+                   pipes-concurrency == 2.0.3,
                    pipes == 4.1.*,
                    async == 2.0.*,
                    lens -any,
                    parsec -any,
                    yi-rope == 0.7.0.*,
-                   bytestring -any,
-                   text -any
+                   -- bytestring -any,
+                   text == 1.2.0.4
     exposed-modules:
                    Skell.Buffer,
                    Skell.Core,
                    Skell.Debug,
                    Skell.Keymap,
-                   -- iSkell.TextDisplay
+                   -- Skell.TextDisplay
                    Skell.Types,
                    Skell.UI.Gtk.Keys,
                    Skell.UI.Gtk
@@ -42,21 +42,21 @@ library
     ghc-options: -Wall -threaded
 
 executable Skell
-    build-depends: base ==4.7.*,
+    build-depends: base ==4.8.*,
                    cairo -any,
                    gtk3 -any,
-                   process ==1.2.0.*,
+                   process ==1.2.*,
                    mtl -any,
-                   containers == 0.5.5.*,
-                   data-default == 0.5.*,
-                   pipes-concurrency == 2.0.*,
+                   containers -any,
+                   data-default -any,
+                   pipes-concurrency == 2.0.3,
                    pipes == 4.1.*,
                    async == 2.0.*,
                    lens -any,
                    parsec -any,
-                   bytestring -any,
+                   -- bytestring -any,
                    yi-rope == 0.7.0.*,
-                   text -any
+                   text == 1.2.0.4
     main-is: Main.hs
     buildable: True
     default-language: Haskell2010
