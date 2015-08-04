@@ -34,6 +34,9 @@ data ISkell
 instance Default ISkell where
   def = INone
 
+instance Show ISkell where
+  show _ = "ISkell"
+
 -- TODO:
 data OSkell =
   OSkell { _textDisplayO :: String

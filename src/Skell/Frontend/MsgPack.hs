@@ -45,10 +45,9 @@ serve host port model = withSocketsDo $ do
   addr <- inet_addr host
   bind sock $ SockAddrInet port addr
   listen sock 10
-  (output, input) <- P.spawn $ P.bounded 400
-  getRequest' output sock
+
   runEffect $ do
-    P.fromInput input
+    getRequest' sock
     >-> forever (wrapModel $ evalStateP def model) 
     >-> sendResponse
 
@@ -63,15 +62,20 @@ serve host port model = withSocketsDo $ do
                     yield (i, x)
 
 
-getRequest' :: P.Output (Connection,ISkell) -> Socket -> IO ()
-getRequest' output sock = do
-  (sock', addr') <- liftIO $ accept sock
-  print "accepto"
-  P.forkIO $ go sock' addr'
-  getRequest' output sock
+getRequest' :: Socket -> Producer (Connection, ISkell) IO ()
+getRequest' sock = do
+  (output, input) <- lift . P.spawn $ P.bounded 400
+  lift . P.forkIO $ go output sock
+  P.fromInput input
   where
-    go :: Socket -> SockAddr -> IO ()
-    go sock' addr' = do
+    go :: P.Output (Connection,ISkell) -> Socket -> IO ()
+    go output sock = do
+      (sock', addr') <- liftIO $ accept sock
+      print "accepto"
+      P.forkIO $ go' sock' addr' output
+      go output sock
+    go' :: Socket -> SockAddr -> P.Output (Connection,ISkell) -> IO ()
+    go' sock' addr' output' = do
       bsOrError <- try (recv sock' 4096)
       print "recibo"
       case bsOrError of
@@ -79,9 +83,9 @@ getRequest' output sock = do
           if not $ BS.null bs 
             then do
               let Just (0, msgid, method, params) = unpack $ fromStrict bs :: Maybe (Int, Int, String, [Object])
-              P.atomically $ (P.send output) ((sock', addr', Request (0, msgid, method, params)), INone)
+              P.atomically $ (P.send output') ((sock', addr', Request (0, msgid, method, params)), INone)
               print "envio"
-              go sock' addr'
+              go' sock' addr' output'
             else return ()
         Left (_::SomeException) -> return ()
 
