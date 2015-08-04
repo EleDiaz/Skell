@@ -6,7 +6,6 @@ module Skell.Keymap (
                      -- defaultEmacsKeymap
                     ) where
 
-import           Control.Applicative ((<$), (<$>))
 import           Data.List
 import           Data.Sequence       (Seq)
 import qualified Data.Sequence       as S

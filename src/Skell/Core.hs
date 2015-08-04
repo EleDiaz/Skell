@@ -5,7 +5,7 @@ import           Control.Monad.State
 import qualified Data.Sequence       as S
 import           Pipes
 
-import qualified Yi.Rope             as YS
+--import qualified Yi.Rope             as YS
 
 import           Skell.Buffer
 import           Skell.Types
@@ -16,15 +16,20 @@ import           Skell.Keymap
 -- para debuger extremo?
 -- U otra idea que se te ocurra
 --
-coreModel :: Pipe ISkell OSkell IOSkell ()
+coreModel :: PSkell
 coreModel = do
   iSk <- await
   -- lift $ get >>= flip _keymap iSk
+  liftIO $ print "Hello from earth"
   st <- lift $ get
-  lift $ defaultEmacsKeymap (iSk^.keyI)
+  case iSk of
+    IKey s ->
+      lift $ defaultEmacsKeymap s
+    _  -> return ()
+
   yield $ OSkell (case S.viewl (st^.buffers) of
                     S.EmptyL -> ""
-                    a S.:< _ -> YS.toString (a^.content)
+                    a S.:< _ -> a^.content
                  )
   when (not $ st^.exit) coreModel
 
