@@ -24,13 +24,13 @@ import           Pipes.Network.TCP
 import           Skell.Types
 
 data RPCMsg = Request (Int, Int, String, [Object])
-            -- ^ Represent a 'request' from a client, 
+            -- ^ Represent a 'request' from a client,
             -- (0,msgID,methodName,parameters)
             | Response (Int, Int, Object, Object)
-            -- ^ Represent the response from server to client, 
+            -- ^ Represent the response from server to client,
             -- (1,msgID==msgID_client_request,errorObject,resultObject)
             | Notification (Int, String, [Object])
-            -- ^ Represent an notification, not is so clear its use. 
+            -- ^ Represent an notification, not is so clear its use.
             -- Client to Server and is like a Request but response by server
             deriving (Eq, Show)
 
@@ -41,29 +41,26 @@ msgPackFrontend = serve "127.0.0.1" 4000
 type Connection = (Socket, SockAddr, RPCMsg)
 
 serve :: HostName -> PortNumber -> PSkell -> IO ()
-serve host port model = withSocketsDo $ do 
-  sock <- socket AF_INET Stream defaultProtocol 
+serve host port model = withSocketsDo $ do
+  sock <- socket AF_INET Stream defaultProtocol
   addr <- inet_addr host
   bind sock $ SockAddrInet port addr
   listen sock 1
 
   runEffect $ do
     getRequest sock
-    >-> forever (wrapModel $ evalStateP def model) 
+    >-> forever (wrapModel $ evalStateP def model)
     >-> sendResponse
 
     where
       -- wrapModel :: Pipe a b s () -> Pipe (x, a) (x, c) s ()
-      wrapModel m = do 
+      wrapModel m = do
         (msgid, iSkell) <- await
         ((lift $ return iSkell) >~ m) >-> helper msgid
 
       -- helper :: a -> Pipe b (a, b) s ()
       helper i = do x <- await
                     yield (i, x)
-
-
-getRequest
 
 getRequest :: Socket -> Producer (Connection, ISkell) IO ()
 getRequest sock = do
@@ -74,8 +71,8 @@ getRequest sock = do
     go sock' addr' = do
       bsOrError <- liftIO $ try (recv sock' 4096)
       case bsOrError of
-          Right bs -> 
-            if not $ BS.null bs 
+          Right bs ->
+            if not $ BS.null bs
               then do
                 let Just (0, msgid, method, params) = unpack $ fromStrict bs :: Maybe (Int, Int, String, [Object])
                 yield ((sock', addr', Request (0, msgid, method, params)), INone)
