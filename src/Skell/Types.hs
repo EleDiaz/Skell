@@ -25,8 +25,7 @@ type PSkell = Pipe ISkell OSkell IOSkell ()
 
 -- | TODO:
 data ISkell
-  = IAction String [String]
-  | IClose
+  = IAction String [Object]
   | INone
   deriving (Show)
 
@@ -69,7 +68,7 @@ instance MethodType (StateT Skell (LoggingT IO) ())  where
 instance (MessagePack a, MethodType r) => MethodType (a -> r) where
   applyMethod f ls = 
     case ls of 
-      [] -> logWarnN "Bad number of arguments, expected 1+"
+      [] -> logWarnN "Bad number of arguments, expected 1..*"
       x:xs -> case fromObject x of 
         Just obj -> applyMethod (f obj) xs
         Nothing -> logWarnN "Bad argument format"

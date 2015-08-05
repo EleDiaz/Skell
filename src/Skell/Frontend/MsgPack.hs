@@ -9,6 +9,7 @@ import           Control.Monad
 import           Control.Exception
 import           Control.Monad.Logger
 
+import           Data.Maybe (fromMaybe)
 import           Data.MessagePack
 import           Data.Default
 import           Data.ByteString.Lazy hiding (unpack, pack)
@@ -23,13 +24,13 @@ import qualified Pipes.Concurrent as P
 
 import           Skell.Types
 
-data RPCMsg = Request (Int, Int, String, [Object])
+data RPCMsg = Request Int String [Object]
             -- ^ Represent a 'request' from a client, 
             -- (0,msgID,methodName,parameters)
-            | Response (Int, Int, Object, Object)
+            | Response Int Object Object
             -- ^ Represent the response from server to client, 
             -- (1,msgID==msgID_client_request,errorObject,resultObject)
-            | Notification (Int, String, [Object])
+            | Notification String [Object]
             -- ^ Represent an notification, not is so clear its use. 
             -- Client to Server and is like a Request but response by server
             deriving (Eq, Show)
@@ -48,7 +49,7 @@ serve host port model = withSocketsDo $ do
   listen sock 10
 
   runStdoutLoggingT . runEffect $ do
-    getRequest' sock
+    getRequest' sock >-> processMsg 
     >-> forever (wrapModel $ evalStateP def model)
     >-> sendResponse
 
@@ -63,40 +64,64 @@ serve host port model = withSocketsDo $ do
                     yield (i, x)
 
 
-getRequest' :: Socket -> Producer (Connection, ISkell) (LoggingT IO) ()
+getRequest' :: Socket -> Producer (Socket, SockAddr, ByteString) (LoggingT IO) ()
 getRequest' sock = do
   (output, input) <- liftIO . P.spawn $ P.bounded 400
   liftIO . P.forkIO $ go output sock
   P.fromInput input
   where
-    go :: P.Output (Connection,ISkell) -> Socket -> IO ()
+    go :: P.Output (Socket, SockAddr, ByteString) -> Socket -> IO ()
     go output sock = do
       (sock', addr') <- liftIO $ accept sock
       P.forkIO $ go' sock' addr' output
       go output sock
 
-    go' :: Socket -> SockAddr -> P.Output (Connection,ISkell) -> IO ()
+    go' :: Socket -> SockAddr -> P.Output (Socket, SockAddr, ByteString) -> IO ()
     go' sock' addr' output' = do
       bsOrError <- try (recv sock' 4096)
       case bsOrError of
         Right bs -> 
           if not $ BS.null bs 
             then do
-              let Just (0, msgid, method, params) = unpack $ fromStrict bs :: Maybe (Int, Int, String, [Object])
-              P.atomically $ (P.send output') ((sock', addr', Request (0, msgid, method, params)), INone)
+              P.atomically $ (P.send output') (sock', addr', fromStrict bs)
               go' sock' addr' output'
             else return ()
         Left (_::SomeException) -> return ()
 
--- TODO:
-processMsg :: Object -> ISkell
-processMsg = undefined
+-- | Process ByteString get the RPCMsg with msgpack format. It can be a Request or a Notification
+processMsg :: Pipe (Socket, SockAddr, ByteString) (Connection, ISkell) (LoggingT IO) ()
+processMsg = do
+  (sock,addr,bs) <- await
+  let bs' = unpack bs
+  let request = bs' >>= fromObject >>= isRequest sock addr
+  let notif   = bs' >>= fromObject >>= isNotification sock addr
+  case request of 
+    Just x -> yield x
+    Nothing -> fromMaybe (lift $ logWarnN "Bad RPC format") (notif >>= return . yield)
+  processMsg
+
+  where 
+    isRequest :: Socket -> SockAddr -> (Int, Int, String, [Object]) -> Maybe (Connection, ISkell)
+    isRequest sock addr (i, msgid, method, params) =
+      if i == 0 then do
+        Just ((sock, addr, Request msgid method params), IAction method params)
+      else 
+        Nothing
+
+    isNotification :: Socket -> SockAddr -> (Int, String, [Object]) -> Maybe (Connection, ISkell)
+    isNotification sock addr (i, method, params) =
+      if i == 2 then do
+        Just ((sock, addr, Notification method params), IAction method params)
+      else
+        Nothing
+
 
 sendResponse :: Consumer (Connection, OSkell) (LoggingT IO) ()
 sendResponse = do
-  ((sock, addr, Request (0,msgid,_,_)), _) <- await -- TODO End OSkell, make a standard.
+  ((sock, addr, Request msgid _ _), _) <- await -- TODO End OSkell, make a standard.
   let response = toStrict $ pack (1::Int, msgid, toObject (), toObject ("Hello"::String))
   liftIO $ sendAllTo sock response addr
+  sendResponse
 
 -- TODO:
 processResponse :: OSkell -> Object
