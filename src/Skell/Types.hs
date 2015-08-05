@@ -1,65 +1,78 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, FlexibleInstances #-}
 module Skell.Types where
 
 import           Control.Lens
 import           Control.Monad.State.Strict
+import           Control.Monad.Logger
 
 import           Data.Default
 import           Data.Sequence       (Seq)
 import qualified Data.Sequence       as S
+import           Data.Map            (Map)
+import qualified Data.Map            as M
+import           Data.MessagePack
 
 import           Pipes
 
---import           Yi.Rope             (YiString)
---import qualified Yi.Rope             as R
+
 
 import           Skell.Buffer        (Buffer)
--- import           Skell.Debug
-
-data Keys = KCtrl | KMeta | KShift | KAlt | KEsc | KBS | KEnter | KUpLeft
-          | KUpRight | KDownLeft | KDownRight | KLeft | KRight | KUp | KDown
-          | KCenter | KBackTab | KPrtScr | KPause | KIns | KHome | KPageUp
-          | KPageDown | KDel | KEnd | KBegin | KMenu | KChar Char | KFun Int
-          deriving (Show, Eq)
-
-data Mouse = MLeftButton | MRightButton | MCenterButton
-           deriving (Show, Eq)
-
--- | TODO:
-data ISkell
-  = IKey (Seq Keys)
-  | IMouse (Mouse, (Int, Int))
-  | IClose
-  | INone
-instance Default ISkell where
-  def = INone
-
-instance Show ISkell where
-  show _ = "ISkell"
 
 -- TODO:
-data OSkell =
-  OSkell { _textDisplayO :: String
-         }
-instance Default OSkell where
-    def = OSkell "HOLA"
-
--- TODO:
-type IOSkell = StateT Skell IO
+type IOSkell = StateT Skell (LoggingT IO)
 
 type PSkell = Pipe ISkell OSkell IOSkell ()
 
--- | Estado del editor
+-- | TODO:
+data ISkell
+  = IAction String [String]
+  | IClose
+  | INone
+  deriving (Show)
+
+instance Default ISkell where
+  def = INone
+
+-- TODO: Este debe ser cambiado a mas preciso...
+data OSkell =
+  OSkell { _textDisplayO :: String
+         }
+
+instance Default OSkell where
+    def = OSkell ""
+
+-- | Editor's State 
 data Skell = Skell
-    { _buffers   :: Seq Buffer
-    -- ^ Buferes disponibles, el _1 es el buffer actual
-    , _clipboard :: String
-    , _keymap    :: ISkell -> IOSkell ()
-    -- ^ Combinaciones de teclas
-    , _exit      :: Bool
+    { _buffers :: Seq Buffer
+    -- ^ Buffers available to clients
+    , _methods :: Map String Method
+    -- ^ Dictionary of all methods expose to client
     }
+
 instance Default Skell where
-    def = Skell (S.singleton def) "" (const (return ())) False
+    def = Skell (S.singleton def) M.empty
+
+-- Note: The methods have to return (), is possible return any more useful like Output perhaps.
+-- | Represent a function of a variable number of arguments(all arguments ought be in MessagePack class)
+newtype Method = Method { unMethod :: [Object] -> IOSkell () }
+
+class MethodType a where
+  applyMethod :: a -> [Object] -> IOSkell ()
+
+-- This would works but, i have short experience with FlexibleInstances
+instance MethodType (StateT Skell (LoggingT IO) ())  where
+  applyMethod f ls =
+    case ls of
+      [] -> f
+      _ -> logWarnN "Bad number of arguments, expected 0" >> return ()
+
+instance (MessagePack a, MethodType r) => MethodType (a -> r) where
+  applyMethod f ls = 
+    case ls of 
+      [] -> logWarnN "Bad number of arguments, expected 1+"
+      x:xs -> case fromObject x of 
+        Just obj -> applyMethod (f obj) xs
+        Nothing -> logWarnN "Bad argument format"
 
 makeLenses ''ISkell
 makeLenses ''OSkell

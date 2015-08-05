@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, OverloadedStrings #-}
 
 module Skell.Frontend.MsgPack where
 
@@ -7,6 +7,7 @@ module Skell.Frontend.MsgPack where
 -- a todos los clientes.....multicast?
 import           Control.Monad
 import           Control.Exception
+import           Control.Monad.Logger
 
 import           Data.MessagePack
 import           Data.Default
@@ -46,78 +47,57 @@ serve host port model = withSocketsDo $ do
   bind sock $ SockAddrInet port addr
   listen sock 10
 
-  runEffect $ do
+  runStdoutLoggingT . runEffect $ do
     getRequest' sock
-    >-> forever (wrapModel $ evalStateP def model) 
+    >-> forever (wrapModel $ evalStateP def model)
     >-> sendResponse
 
     where
-      -- wrapModel :: Pipe a b s () -> Pipe (x, a) (x, c) s ()
+      wrapModel :: Monad s => Pipe a b s () -> Pipe (x, a) (x, b) s ()
       wrapModel m = do 
         (msgid, iSkell) <- await
         ((lift $ return iSkell) >~ m) >-> helper msgid
 
-      -- helper :: a -> Pipe b (a, b) s ()
+      helper ::Monad s => a -> Pipe b (a, b) s ()
       helper i = do x <- await
                     yield (i, x)
 
 
-getRequest' :: Socket -> Producer (Connection, ISkell) IO ()
+getRequest' :: Socket -> Producer (Connection, ISkell) (LoggingT IO) ()
 getRequest' sock = do
-  (output, input) <- lift . P.spawn $ P.bounded 400
-  lift . P.forkIO $ go output sock
+  (output, input) <- liftIO . P.spawn $ P.bounded 400
+  liftIO . P.forkIO $ go output sock
   P.fromInput input
   where
     go :: P.Output (Connection,ISkell) -> Socket -> IO ()
     go output sock = do
       (sock', addr') <- liftIO $ accept sock
-      print "accepto"
       P.forkIO $ go' sock' addr' output
       go output sock
+
     go' :: Socket -> SockAddr -> P.Output (Connection,ISkell) -> IO ()
     go' sock' addr' output' = do
       bsOrError <- try (recv sock' 4096)
-      print "recibo"
       case bsOrError of
         Right bs -> 
           if not $ BS.null bs 
             then do
               let Just (0, msgid, method, params) = unpack $ fromStrict bs :: Maybe (Int, Int, String, [Object])
               P.atomically $ (P.send output') ((sock', addr', Request (0, msgid, method, params)), INone)
-              print "envio"
               go' sock' addr' output'
             else return ()
         Left (_::SomeException) -> return ()
 
-
--- getRequest :: Socket -> Producer (Connection, ISkell) IO ()
--- getRequest sock = do
---     (sock', addr') <- liftIO $ accept sock
---     go sock' addr'
---   where
---     go :: Socket -> SockAddr -> Producer (Connection, ISkell) IO ()
---     go sock' addr' = do
---       bsOrError <- liftIO $ try (recv sock' 4096)
---       case bsOrError of
---           Right bs -> 
---             if not $ BS.null bs 
---               then do
---                 let Just (0, msgid, method, params) = unpack $ fromStrict bs :: Maybe (Int, Int, String, [Object])
---                 yield ((sock', addr', Request (0, msgid, method, params)), INone)
---                 go sock' addr'
---               else getRequest sock
---           Left (_::SomeException) -> getRequest sock
-
-processMsg :: RPCMsg -> ISkell
+-- TODO:
+processMsg :: Object -> ISkell
 processMsg = undefined
 
-sendResponse :: Consumer (Connection, OSkell) IO ()
+sendResponse :: Consumer (Connection, OSkell) (LoggingT IO) ()
 sendResponse = do
   ((sock, addr, Request (0,msgid,_,_)), _) <- await -- TODO End OSkell, make a standard.
   let response = toStrict $ pack (1::Int, msgid, toObject (), toObject ("Hello"::String))
   liftIO $ sendAllTo sock response addr
-  sendResponse
 
-
-processResponse :: OSkell -> RPCMsg
+-- TODO:
+processResponse :: OSkell -> Object
 processResponse _ = undefined
