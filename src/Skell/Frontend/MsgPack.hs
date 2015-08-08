@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables, OverloadedStrings, TupleSections #-}
 
 module Skell.Frontend.MsgPack where
 
@@ -15,8 +15,9 @@ import           Data.Default
 import           Data.ByteString.Lazy hiding (unpack, pack)
 import qualified Data.ByteString as BS
 
-import           Network.Socket hiding (send, sendTo, recv, recvFrom)
-import           Network.Socket.ByteString
+import qualified Network.Socket as N
+import           Network.Transport
+import           Network.Transport.TCP
 
 import           Pipes
 import           Pipes.Lift
@@ -39,17 +40,11 @@ data RPCMsg = Request Int String [Object]
 msgPackFrontend :: PSkell -> IO ()
 msgPackFrontend = serve "127.0.0.1" 4000
 
-type Connection = (Socket, SockAddr, RPCMsg)
-
-serve :: HostName -> PortNumber -> PSkell -> IO ()
-serve host port model = withSocketsDo $ do 
-  sock <- socket AF_INET Stream defaultProtocol 
-  addr <- inet_addr host
-  bind sock $ SockAddrInet port addr
-  listen sock 10
+serve :: N.HostName -> N.PortNumber -> PSkell -> IO ()
+serve host port model = N.withSocketsDo $ do 
 
   runStdoutLoggingT . runEffect $ do
-    getRequest' sock >-> processMsg 
+    getRequest' host port >-> processMsg 
     >-> forever (wrapModel $ evalStateP def model)
     >-> sendResponse
 
@@ -63,30 +58,31 @@ serve host port model = withSocketsDo $ do
       helper i = do x <- await
                     yield (i, x)
 
-
-getRequest' :: Socket -> Producer (Socket, SockAddr, ByteString) (LoggingT IO) ()
-getRequest' sock = do
+getRequest' :: N.HostName -> N.ServiceName -> Producer (_, ByteString) (LoggingT IO) ()
+getRequest' host port = do
   (output, input) <- liftIO . P.spawn $ P.bounded 400
-  liftIO . P.forkIO $ go output sock
+  let connTCP = createTransport host port >>= (\transport -> return . (transport,) . newEndPoint transport)
+  case connTCP of
+    Right (transport, endpoint) -> liftIO . P.forkIO $ go output endpoint
+    Left e -> lift $ logErrorN "Connection event not treat"
+
   P.fromInput input
   where
-    go :: P.Output (Socket, SockAddr, ByteString) -> Socket -> IO ()
-    go output sock = do
-      (sock', addr') <- liftIO $ accept sock
-      P.forkIO $ go' sock' addr' output
-      go output sock
+    go :: P.Output (_, ByteString) -> Endpoint -> Map ConnectionId (MVar Connection) -> IO ()
+    go output endpoint cs = do
+      event <- liftIO $ receive endpoint
+      case event of 
+        ConnectionOpened cid rel addr -> undefined
 
-    go' :: Socket -> SockAddr -> P.Output (Socket, SockAddr, ByteString) -> IO ()
-    go' sock' addr' output' = do
-      bsOrError <- try (recv sock' 4096)
-      case bsOrError of
-        Right bs -> 
-          if not $ BS.null bs 
+        Received cid payload -> do 
+            if not $ BS.null bs 
             then do
               P.atomically $ (P.send output') (sock', addr', fromStrict bs)
-              go' sock' addr' output'
             else return ()
-        Left (_::SomeException) -> return ()
+        ConnectionClosed cid -> do undefined
+        EndPointClosed -> do undefined
+        _ -> lift $ logWarnN "Connection event not treat"
+      go output endpoint cs
 
 -- | Process ByteString get the RPCMsg with msgpack format. It can be a Request or a Notification
 processMsg :: Pipe (Socket, SockAddr, ByteString) (Connection, ISkell) (LoggingT IO) ()
@@ -120,9 +116,16 @@ sendResponse :: Consumer (Connection, OSkell) (LoggingT IO) ()
 sendResponse = do
   ((sock, addr, Request msgid _ _), _) <- await -- TODO End OSkell, make a standard.
   let response = toStrict $ pack (1::Int, msgid, toObject (), toObject ("Hello"::String))
-  liftIO $ sendAllTo sock response addr
+  liftIO $ sendAllTo sock response addr -- catch exeptions !!!
   sendResponse
 
 -- TODO:
 processResponse :: OSkell -> Object
 processResponse _ = undefined
+
+onCtrlC :: IO a -> IO () -> IO a
+p `onCtrlC` q = catchJust isUserInterrupt p (const $ q >> p `onCtrlC` q)
+  where
+    isUserInterrupt :: AsyncException -> Maybe () 
+    isUserInterrupt UserInterrupt = Just ()
+    isUserInterrupt _             = Nothing
