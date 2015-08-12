@@ -3,17 +3,15 @@ module Skell.Core where
 import           Control.Lens
 import           Control.Monad.State
 import qualified Data.Sequence       as S
-import           Pipes
 
 import           Skell.Buffer
 import           Skell.Types
 
 
-coreModel :: PSkell
-coreModel = do
-  iSk <- await
-  st <- lift $ get
-  yield $ OSkell (case S.viewl (st^.buffers) of
+coreModel :: ISkell -> IOSkell OSkell
+coreModel iSkell = do
+  st <- get
+  return $ OSkell (case S.viewl (st^.buffers) of
                     S.EmptyL -> ""
                     a S.:< _ -> a^.content
                  )

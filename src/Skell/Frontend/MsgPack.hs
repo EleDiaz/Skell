@@ -1,15 +1,15 @@
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings, TupleSections #-}
-
 module Skell.Frontend.MsgPack where
 
--- Con este metodo se puede crear una tercera aplicacion que solo realize pequeñas funcionalidades
--- Para permitir mas de conexiones simultaneas al servidor hay que estar pendiente de siempre actualizar
--- a todos los clientes.....multicast?
+import           Control.Lens
 import           Control.Monad
 import           Control.Exception
 import           Control.Monad.Logger
+import           Control.Monad.State.Strict
+import           Control.Concurrent
+import           Control.Concurrent.STM
 
-import           Data.Maybe (fromMaybe)
+import qualified Data.Map as M
 import           Data.MessagePack
 import           Data.Default
 import           Data.ByteString.Lazy hiding (unpack, pack)
@@ -18,10 +18,6 @@ import qualified Data.ByteString as BS
 import qualified Network.Socket as N
 import           Network.Transport
 import           Network.Transport.TCP
-
-import           Pipes
-import           Pipes.Lift
-import qualified Pipes.Concurrent as P
 
 import           Skell.Types
 
@@ -37,91 +33,105 @@ data RPCMsg = Request Int String [Object]
             deriving (Eq, Show)
 
 -- | By default it's connect to '127.0.0.1' in the port 4000
-msgPackFrontend :: PSkell -> IO ()
-msgPackFrontend = serve "127.0.0.1" 4000
+msgPackFrontend :: (ISkell -> IOSkell OSkell) -> IO ()
+msgPackFrontend = serve "127.0.0.1" "4000"
 
-serve :: N.HostName -> N.PortNumber -> PSkell -> IO ()
-serve host port model = N.withSocketsDo $ do 
+-- | Add feature of filter logger messages by log level "filterLogger" 
+serve :: N.HostName -> N.ServiceName -> (ISkell -> IOSkell OSkell) -> IO ()
+serve host port model = N.withSocketsDo $ do
+  serverDone <- newEmptyMVar
+  msgs       <- atomically $ newTChan 
+  Right transport <- createTransport host port defaultTCPParameters
+  Right endpoint <- liftIO $ newEndPoint transport
 
-  runStdoutLoggingT . runEffect $ do
-    getRequest' host port >-> processMsg 
-    >-> forever (wrapModel $ evalStateP def model)
-    >-> sendResponse
+  forkIO . runStdoutLoggingT . flip evalStateT def $ do
+    getRequest' endpoint msgs serverDone
+    forever $ processMsg msgs >>= wrap model >>= sendResponse
 
-    where
-      wrapModel :: Monad s => Pipe a b s () -> Pipe (x, a) (x, b) s ()
-      wrapModel m = do 
-        (msgid, iSkell) <- await
-        ((lift $ return iSkell) >~ m) >-> helper msgid
-
-      helper ::Monad s => a -> Pipe b (a, b) s ()
-      helper i = do x <- await
-                    yield (i, x)
-
-getRequest' :: N.HostName -> N.ServiceName -> Producer (_, ByteString) (LoggingT IO) ()
-getRequest' host port = do
-  (output, input) <- liftIO . P.spawn $ P.bounded 400
-  let connTCP = createTransport host port >>= (\transport -> return . (transport,) . newEndPoint transport)
-  case connTCP of
-    Right (transport, endpoint) -> liftIO . P.forkIO $ go output endpoint
-    Left e -> lift $ logErrorN "Connection event not treat"
-
-  P.fromInput input
+  readMVar serverDone `onCtrlC` closeTransport transport
   where
-    go :: P.Output (_, ByteString) -> Endpoint -> Map ConnectionId (MVar Connection) -> IO ()
-    go output endpoint cs = do
+    wrap :: Monad m => (b -> m c) -> (a,b) -> m (a,c)
+    wrap mbc (a, b) = mbc b >>= return . (a,)
+
+
+getRequest' :: EndPoint -> TChan (ConnectionId, ByteString) -> MVar () -> IOSkell ()
+getRequest' endpoint msgs serverDone = do
+  conns <- liftIO $ newMVar M.empty
+  connections .= conns
+  _ <- liftIO . forkIO $ go conns
+  return ()
+
+  where
+    go :: MVar (M.Map ConnectionId (MVar Connection)) -> IO ()
+    go cs = do
       event <- liftIO $ receive endpoint
       case event of 
-        ConnectionOpened cid rel addr -> undefined
-
-        Received cid payload -> do 
-            if not $ BS.null bs 
+        ConnectionOpened cid rel addr -> do
+          connMVar <- newEmptyMVar
+          forkIO $ do
+            Right conn <- connect endpoint addr rel defaultConnectHints
+            putMVar connMVar conn
+            modifyMVar_ cs (return . M.insert cid connMVar) 
+          go cs
+        Received cid (payload:_) -> do 
+            if not $ BS.null payload 
             then do
-              P.atomically $ (P.send output') (sock', addr', fromStrict bs)
+              atomically $ writeTChan msgs (cid, fromStrict payload)
             else return ()
-        ConnectionClosed cid -> do undefined
-        EndPointClosed -> do undefined
-        _ -> lift $ logWarnN "Connection event not treat"
-      go output endpoint cs
+        ConnectionClosed cid -> do
+          forkIO $ do
+            cs' <- readMVar cs
+            conn <- readMVar (cs' M.! cid)
+            close conn 
+            putMVar cs (M.delete cid cs')
+          go cs
+        EndPointClosed -> do
+          putMVar serverDone ()
+      go cs
 
 -- | Process ByteString get the RPCMsg with msgpack format. It can be a Request or a Notification
-processMsg :: Pipe (Socket, SockAddr, ByteString) (Connection, ISkell) (LoggingT IO) ()
-processMsg = do
-  (sock,addr,bs) <- await
+processMsg :: TChan (ConnectionId, ByteString) -> IOSkell (RPCMsg, ISkell)
+processMsg msgs = do
+  (cid,bs) <- liftIO . atomically $ readTChan msgs
+  workOnConn .= cid
   let bs' = unpack bs
-  let request = bs' >>= fromObject >>= isRequest sock addr
-  let notif   = bs' >>= fromObject >>= isNotification sock addr
-  case request of 
-    Just x -> yield x
-    Nothing -> fromMaybe (lift $ logWarnN "Bad RPC format") (notif >>= return . yield)
-  processMsg
+  let request = bs' >>= fromObject >>= isRequest
+  let notif   = bs' >>= fromObject >>= isNotification
+  case request of
+    Just x -> return x
+    Nothing -> case notif of
+      Just x -> return x
+      Nothing -> lift $ logWarnN "Bad RPC format" >> return (undefined, INone)
 
   where 
-    isRequest :: Socket -> SockAddr -> (Int, Int, String, [Object]) -> Maybe (Connection, ISkell)
-    isRequest sock addr (i, msgid, method, params) =
+    isRequest :: (Int, Int, String, [Object]) -> Maybe (RPCMsg, ISkell)
+    isRequest (i, msgid, method, params) =
       if i == 0 then do
-        Just ((sock, addr, Request msgid method params), IAction method params)
+        Just (Request msgid method params, IAction method params)
       else 
         Nothing
 
-    isNotification :: Socket -> SockAddr -> (Int, String, [Object]) -> Maybe (Connection, ISkell)
-    isNotification sock addr (i, method, params) =
+    isNotification :: (Int, String, [Object]) -> Maybe (RPCMsg, ISkell)
+    isNotification (i, method, params) =
       if i == 2 then do
-        Just ((sock, addr, Notification method params), IAction method params)
+        Just (Notification method params, IAction method params)
       else
         Nothing
 
 
-sendResponse :: Consumer (Connection, OSkell) (LoggingT IO) ()
-sendResponse = do
-  ((sock, addr, Request msgid _ _), _) <- await -- TODO End OSkell, make a standard.
+sendResponse :: (RPCMsg, OSkell) -> IOSkell ()
+sendResponse (Request msgid _ _, oSkell) = do
   let response = toStrict $ pack (1::Int, msgid, toObject (), toObject ("Hello"::String))
-  liftIO $ sendAllTo sock response addr -- catch exeptions !!!
-  sendResponse
-
--- TODO:
-processResponse :: OSkell -> Object
-processResponse _ = undefined
+  st <- get
+  conns <- liftIO $ readMVar (st^.connections)
+  case M.lookup (st^.workOnConn) conns of
+    Just mConn -> do 
+      conn <- liftIO $ readMVar mConn
+      err  <- liftIO $ send conn [response]
+      case err of
+        Right () -> return ()
+        Left _   -> lift $ logWarnNS "MsgPack.hs" "Fail on sending response"
+    Nothing -> lift $ logWarnNS "MsgPack.hs" "Not exist connection"
 
 onCtrlC :: IO a -> IO () -> IO a
 p `onCtrlC` q = catchJust isUserInterrupt p (const $ q >> p `onCtrlC` q)

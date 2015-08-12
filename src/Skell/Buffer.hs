@@ -5,9 +5,6 @@ import           Control.Lens
 import           Control.Monad.State
 import           Data.Default
 
---import           Yi.Rope             (YiString)
---import qualified Yi.Rope             as YS
-
 
 -- | TODO:
 data Buffer = Buffer
